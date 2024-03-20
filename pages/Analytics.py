@@ -17,94 +17,47 @@ import matplotlib
 from pandas import Series
 from matplotlib import pyplot
 from statsmodels.tsa.seasonal import seasonal_decompose
+import pickle
+import numpy as np
 
 
 st. set_page_config(layout="wide")
 
 
-def rfc(df, dep, keys):
-    from sklearn.model_selection import train_test_split as tts  
-    A_train, A_test, b_train, b_test = tts(df[keys], df[dep], test_size = 0.3, random_state = 0)  
-    from sklearn.ensemble import RandomForestClassifier as RFC  
-    rfc = RFC()  
-    rfc.fit(A_train, b_train)
-
-    b_pred = rfc.predict(A_test)
-    score = accuracy_score(b_test, b_pred)
-    filename = 'rfc.sav'
-    pickle.dump(rfc, open(filename, 'wb'))
-    return accuracy_score(b_test,b_pred), recall_score(b_test,b_pred)
-
-    
-def logregr(df, dep, keys):
-    from sklearn.model_selection import train_test_split as tts  
-    A_train, A_test, b_train, b_test = tts(df[keys], df[dep], test_size = 0.3, random_state = 0)  
-    from sklearn.linear_model import LogisticRegression
-    logr = LogisticRegression()
-    logr.fit(A_train, b_train)
-    
-    b_pred = logr.predict(A_test)  
-    filename = 'logr.sav'
-    pickle.dump(logregr, open(filename, 'wb'))
-    return accuracy_score(b_test,b_pred), recall_score(b_test,b_pred)
+def arima(train, dep, indep, arima_order):
+    print(dep)
+    print(indep)
+    print(arima_order)
+    print(type(train[dep]))
+    print(type(train[indep]))
+    model = ARIMA(endog=train[dep], exog=train[indep], order=arima_order)  # Example order, tune as needed
+    model_fit = model.fit()
+    # Save the model to a file
+    with open('arima_model.pkl', 'wb') as f:
+        pickle.dump(model_fit, f)
+    return model_fit
+  
  
 
-def knn(df, dep, keys):
-    from sklearn.model_selection import train_test_split as tts  
-    A_train, A_test, b_train, b_test = tts(df[keys], df[dep], test_size = 0.3, random_state = 0)
-    from sklearn.neighbors import KNeighborsClassifier
-    knn_ = KNeighborsClassifier(n_neighbors=3)
-    
-    knn_.fit(A_train, b_train)
-    b_pred=knn_.predict(A_test)
-    filename = 'knn.sav'
-    pickle.dump(knn, open(filename, 'wb'))
-    return accuracy_score(b_test,b_pred), recall_score(b_test,b_pred)
- 
-
-def svm(df, dep, keys):
-    from sklearn.model_selection import train_test_split as tts  
-    A_train, A_test, b_train, b_test = tts(df[keys], df[dep], test_size = 0.3, random_state = 0)
-    from sklearn.pipeline import make_pipeline
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.svm import SVC
-    clf = make_pipeline(StandardScaler(), SVC(gamma='auto'))
- 
-    clf.fit(A_train, b_train)
-    b_pred=clf.predict(A_test)
-    filename = 'svm.sav'
-    pickle.dump(clf, open(filename, 'wb'))
-    return accuracy_score(b_test,b_pred), recall_score(b_test,b_pred)
- 
-
-def annModel(df, dep, keys):
+def annModel(train, dep, indep):
     ann = Sequential()
-    from sklearn.model_selection import train_test_split as tts  
-    A_train, A_test, b_train, b_test = tts(df[keys], df[dep], test_size = 0.3, random_state = 0)
-    
     #adding the input and first hidden layer
-    ann.add(Dense(16, activation='relu', kernel_initializer='glorot_uniform',input_dim=len(keys)))
+    ann.add(Dense(16, activation='relu', kernel_initializer='glorot_uniform',input_dim=len(indep)))
     #adding second layer
     ann.add(Dense(6, activation='relu', kernel_initializer='glorot_uniform'))
     #adding the output layer
     ann.add(Dense(1, kernel_initializer='uniform', activation='sigmoid'))
 
     ann.compile(optimizer='Adam',loss='binary_crossentropy',metrics=['accuracy'])
-    ann.fit(A_train, b_train,
+    ann.fit(train[indep], train[dep],
         batch_size=35,
         epochs=50,
         shuffle=True,
     )
 
-    b_pred=ann.predict(A_test)
-    for i in range(len(b_pred)):
-        if b_pred[i] >= 0.5:
-            b_pred[i] = 1
-        else:
-            b_pred[i] = 0
+    ann.save("ann.h5")
 
-    ann.save('ann.h5')
-    return accuracy_score(b_test,b_pred), recall_score(b_test,b_pred)
+    return ann    
     
 def test(y_test):
     logr=pickle.load(open('logr.sav', 'rb'))
@@ -124,13 +77,9 @@ def selectCatVar(df):
     l=[]
     for col in df.columns:
         l.append(col)
-    options = st.multiselect(
-        'Select categorical variables if any',
-        l
-    )
 
-    targets = st.multiselect(
-        'Select target variables if any',
+    indep = st.multiselect(
+        'Select independent variables',
         l
     )
 
@@ -138,13 +87,18 @@ def selectCatVar(df):
         l
     )
 
+    user_input = st.radio("Is failure field a categorical variable. \nSelect yes or no:", ("yes", "no"))
+
+    cat = st.multiselect(
+        'Select other categorical variables',
+        l
+    )
+
     visualize_l = st.selectbox('Select variable to visualize against failure',
         l
     )
 
-    number = st.number_input('Enter value to replace Nan : ')
-
-    return options,targets,failure,number,visualize_l
+    return indep,failure,user_input,cat,visualize_l
 
 
 st.markdown("# Analytics")
@@ -152,14 +106,23 @@ uploaded_file = st.file_uploader("Choose a file")
 
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
-    options,targets,failure,number,visualize_l=selectCatVar(df)
+    indep,failure,user_input,cat,visualize_l=selectCatVar(df)
 
     df['datetime_new'] = pd.to_datetime(
         df['datetime'],
         format="%Y-%m-%d %H:%M:%S"
     )
 
-    for option in options:
+    new_failure=None
+
+    if user_input == "yes":
+        new_failure = failure + '_new'
+        df[failure]=df[failure].fillna('a')
+        print(df[failure].unique())
+        df[new_failure]=LabelEncoder().fit_transform(df[failure]) 
+        print(df[new_failure].unique())
+
+    for option in cat:
         new_option = option + '_new'
         df[option]=df[option].fillna('a')
         print(df[option].unique())
@@ -173,27 +136,31 @@ if uploaded_file is not None:
     models=st.button('Models')
     trends=st.button('Seasonal/trends')
     failures_overtime=st.button('Cumulative failures')
+    
+    size= int(len(df)*0.75)
+    train, test = df[0:size], df[size:len(df)]
 
     if summary:
         st.write(df.describe())
     
     if visualize:
-        
+        print("test-1")
         fig, ax = plt.subplots()
         fig.set_figheight(6)
         fig.set_figwidth(10)
         dates = matplotlib.dates.date2num(df['datetime_new'])
         
-        plt.plot_date(dates, df[visualize_l], linestyle='-', marker='', label='Voltage')
+        plt.plot_date(dates, df[visualize_l], linestyle='-', marker='', label=visualize_l)
 
         # Plot Failures
-        plt.plot_date(dates, df['failure'], color='red', linestyle='None', marker='o', markersize=5, label='Failures')
+        plt.plot_date(dates, df['failure'], color='red', linestyle='None', marker='*', markersize=1, label='Failures')
 
         # Title and labels
-        plt.title("Failures with Voltage Variations")
+        plt.title(f"Failures with {visualize_l} Variations")
         plt.xlabel("Date")
-        plt.ylabel("Voltage")
-    
+        plt.ylabel(visualize_l)
+
+
         st.pyplot(fig)
     
     if trends:
@@ -248,4 +215,62 @@ if uploaded_file is not None:
         plt.tight_layout()
         plt.show()
         st.pyplot(fig)
+
+    if models:
+        fig, ax = plt.subplots()
+        fig.set_figheight(1)
+        fig.set_figwidth(2)
+        col1, col2= st.columns([3,3])
         
+        with col1:
+            st.write("ARIMA")
+            
+            model_fit = arima(train, new_failure, indep, (1,0,1))
+            b_pred = model_fit.forecast(steps=len(test[new_failure]), exog=test[indep])
+            new_b_pred=[]
+
+            for i in b_pred:
+                if i >= 0.5:
+                    i = 1
+                    new_b_pred.append(i)
+                else:
+                    i = 0
+                    new_b_pred.append(i)
+
+            print(list(set(new_b_pred)))
+            print("------------")
+            thresholded_output = [1 if x > 0 else 0 for x in test[new_failure]]
+            print(list(set(thresholded_output)))
+
+            acc = accuracy_score(thresholded_output,new_b_pred)
+            rec = recall_score(thresholded_output,new_b_pred)
+            mse = mean_squared_error(test[new_failure], b_pred)
+
+            st.write("Accuracy : ", acc)
+            st.write("Recall : ", rec)
+            st.write("MSE : ", mse)
+        
+        with col2:
+            st.write("ANN")
+
+            ann=annModel(train, new_failure, indep)
+
+            b_pred=ann.predict(test[indep])
+            b_pred_copy=b_pred
+            for i in range(len(b_pred)):
+                if b_pred[i] >= 0.5:
+                    b_pred[i] = 1
+                else:
+                    b_pred[i] = 0
+
+
+            thresholded_output = [1 if x > 0 else 0 for x in test[new_failure]]
+            print(list(set(thresholded_output)))
+
+            acc = accuracy_score(thresholded_output,new_b_pred)
+            rec = recall_score(thresholded_output,new_b_pred)
+            mse = mean_squared_error(test[new_failure], b_pred_copy)
+
+            st.write("Accuracy : ", acc)
+            st.write("Recall : ", rec)
+            st.write("MSE : ", mse)
